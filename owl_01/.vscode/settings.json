@@ -10,6 +10,11 @@
         "array": "cpp",
         "initializer_list": "cpp",
         "utility": "cpp",
-        "sstream": "cpp"
-    }
+        "sstream": "cpp",
+        "functional": "cpp",
+        "bitset": "cpp",
+        "algorithm": "cpp",
+        "regex": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "Enabled"
 }

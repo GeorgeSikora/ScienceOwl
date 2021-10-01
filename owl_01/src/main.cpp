@@ -1,24 +1,26 @@
+/* required libraries */
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-
 #include <SPI.h>
 #include <SD.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <ArduinoJson.h>
+#include <StreamUtils.h>
 
-#define PIN_ADC_BAT 35
-#define PIN_ADC_SOLAR 36
-#define ADC_BATTERY_LEVEL_SAMPLES 100
+/* custom libraries */
+#include <Sensors.h>
+#include <Storage.h>
+#include <Webserver.h>
+#include <Arduino.h>
 
 #define uS_TO_S_FACTOR 1000000 /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP 60       /* ESP32 should sleep more seconds  (note SIM7000 needs ~20sec to turn off if sleep is activated) */
-RTC_DATA_ATTR int bootCount = 0;
 
 /* DHT22 Temp & Humidity sensor */
-#include <Adafruit_Sensor.h>
-#include <DHT.h>
 #define DHTPIN 32
 #define DHTTYPE 22
-DHT dht(DHTPIN, DHTTYPE);
 
 /* SD Card */
 #define SD_MISO  2
@@ -26,13 +28,57 @@ DHT dht(DHTPIN, DHTTYPE);
 #define SD_SCLK 14
 #define SD_CS   13
 
+RTC_DATA_ATTR int bootCount = 0;
+
+/* webserver instance */
+Webserver ws = Webserver();
+
+/* temp & humidity sensor */
+DHT dht(DHTPIN, DHTTYPE);
+
+/* custom name displayed in router DHCP list */
 String hostname = "ScienceOwlT7000";
 
-const char* ssid = "WifiSikora";
+/* Put IP Address details */
+IPAddress local_ip(192,168,1,1);
+IPAddress gateway(192,168,1,1);
+IPAddress subnet(255,255,255,0);
+
+const char* ssid = "WifiSikora"; 
 const char* password = "mostori871";
 
-//Your Domain name with URL path or IP address with path
+/* target URL link for sending data */
 String serverName = "http://192.168.0.101/esp32/test1.php";
+
+/*
+
+[TODO]: timeoutCount !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+*/
+struct WIFI_NETWORK {
+    char* ssid;
+    char* password;
+    long unsigned int connectionCount;
+};
+
+int wifiNetworksSize = 3;
+WIFI_NETWORK wifiNetworks[8] = {
+    { // 0
+        ssid: strdup("xdd"),
+        password: strdup("lolko"),
+        connectionCount: 0,
+    },
+    { // 1
+        ssid: strdup("bobik"),
+        password: strdup("awdw"),
+        connectionCount: 0,
+    },
+    { // 2
+        ssid: strdup("WifiSikora"),
+        password: strdup("mostori871"),
+        connectionCount: 0,
+    },
+};
 
 struct T_FILE_TREE {
     char* name;
@@ -46,14 +92,144 @@ int treeIndex = 0;
 
 void shutdown();
 void print_wakeup_reason();
-void read_adc_bat(uint16_t *voltage);
-void read_adc_solar(uint16_t *voltage);
 void printDirectory(File dir, int parentId);
 void getInnerFiles(T_FILE_TREE tree[], File dir, int index);
+
+int getWifiNetworksSize();
+void promoteWifiNetwork(int index);
+void printWifiNetworks();
+void loadWifiNetworks();
+void saveWifiNetworks();
+
+int getWifiNetworksSize()
+{
+    int index = 0;
+    while (wifiNetworks[index].ssid != NULL)
+    {
+        index++;
+    }
+    return index;
+}
+
+void promoteWifiNetwork(int index)
+{
+    if (index <= 0 || index >= wifiNetworksSize) 
+    {
+        return;
+    }
+
+    Serial.println("===== Promoting Wifi Network =====");
+
+    WIFI_NETWORK target = wifiNetworks[index];
+    Serial.println("Target wifi network to promote:");
+    Serial.printf("[%d] ssid: %s password: %s\n", index, target.ssid, target.password);
+
+    for (int i = index; i >= 1; i--)
+    {
+        wifiNetworks[i] = wifiNetworks[i-1];
+    }
+
+    wifiNetworks[0] = target;
+}
+
+void printWifiNetworks()
+{
+    Serial.println("===== Wifi Networks List =====");
+
+    for (int i = 0; i < wifiNetworksSize; i++)
+    {
+        WIFI_NETWORK wn = wifiNetworks[i];
+
+        Serial.printf("[%d] ssid: %s password: %s\n", i, wn.ssid, wn.password);
+    }
+}
+
+void loadWifiNetworks()
+{
+    File file = SD.open("/wifi_networks.json");
+
+    if (!file) 
+    {
+        Serial.println("ERROR! File \"wifi_networks.json\" on SD card doesn't exists!");
+        return;
+    }
+
+    String jsonStr = "";
+    while (file.available())
+    {
+        jsonStr += (char)file.read();
+    }
+    file.close();
+
+    Serial.println("===== strWifiNetworks =====");
+    Serial.printf("Maximum alloc memory: %d\n", ESP.getMaxAllocHeap());
+    Serial.printf("WifiNetworks string length: %d\n", jsonStr.length());
+    Serial.println(jsonStr);
+
+    // compute the required size
+    const size_t CAPACITY = 1024;
+
+    // allocate the memory for the document
+    StaticJsonDocument<CAPACITY> doc;
+
+    // parse a JSON array
+    deserializeJson(doc, jsonStr);
+
+    // extract the values
+    JsonArray array = doc.as<JsonArray>();
+    int i = 0;
+    for (JsonVariant v : array) 
+    {
+        JsonObject obj = v.as<JsonObject>();
+
+        const char* ssid = obj["ssid"];
+        const char* password = obj["password"];
+        const long unsigned int connectionCount = obj["connectionCount"];
+
+        wifiNetworks[i].ssid = strdup(ssid);
+        wifiNetworks[i].password = strdup(password);
+        wifiNetworks[i].connectionCount = connectionCount;
+        
+        Serial.printf("ssid: %s password: %s connectionCount: %lu \n", ssid, password, connectionCount);
+
+        i++;
+    }
+
+    wifiNetworksSize = array.size();
+}
+
+void saveWifiNetworks()
+{
+    Serial.println("===== saveWifiNetworks =====");
+    // compute the required size
+    const size_t CAPACITY = 1024;
+
+    // allocate the memory for the document
+    StaticJsonDocument<CAPACITY> doc;
+
+    // create an empty array
+    JsonArray array = doc.to<JsonArray>();
+
+    for (int i = 0; i < wifiNetworksSize; i++)
+    {
+        Serial.printf("saveWifiNetworks index %d", i);
+        JsonObject obj = array.createNestedObject();
+
+        obj["ssid"] = wifiNetworks[i].ssid;
+        obj["password"] = wifiNetworks[i].password;
+        obj["connectionCount"] = wifiNetworks[i].connectionCount;
+    }
+
+    File file = SD.open("/wifi_networks.json", FILE_WRITE);
+    WriteLoggingStream loggedFile(file, Serial);
+    serializeJson(doc, loggedFile);
+    file.close();
+}
 
 void setup() 
 {
     Serial.begin(115200); 
+    Serial.println("Setup...");
 
     Serial.println("===== SD Card =====");
     SPI.begin(SD_SCLK, SD_MISO, SD_MOSI);
@@ -61,7 +237,7 @@ void setup()
     if (!SD.begin(SD_CS)) 
     {
         Serial.println("○ Not detected...");
-    } 
+    }
     else 
     {
         uint32_t cardSize = SD.cardSize() / (1024 * 1024);
@@ -76,6 +252,81 @@ void setup()
         }
     }
 
+    loadWifiNetworks();
+
+    unsigned long timeoutTimer = 0;
+
+    Serial.println("===== WiFi =====");
+
+    wifiNetworksSize = getWifiNetworksSize();
+    Serial.printf("Size of stored wifi networks: %d\n", wifiNetworksSize);
+    Serial.println("Trying connect to wifi network points:");
+
+    for (int i = 0; i < wifiNetworksSize; i++)
+    {
+        WIFI_NETWORK wn = wifiNetworks[i];
+
+        timeoutTimer = millis();
+
+        // Try to connect WiFi
+        Serial.printf("[%d] ssid: %s password: %s ", i, wn.ssid, wn.password);
+        WiFi.begin(wn.ssid, wn.password);
+
+        while (1) 
+        {
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                Serial.printf(" Connected!\n");
+                promoteWifiNetwork(i);
+                break;
+            }
+
+            if (millis() > timeoutTimer + 6000)
+            {
+                Serial.printf(" Connection timeout\n");
+                break;
+            }
+
+            delay(300);
+            Serial.print(".");
+        }
+
+        if (WiFi.status() == WL_CONNECTED) break;
+    }
+
+    printWifiNetworks();
+    saveWifiNetworks();
+
+    // WiFi is not connected
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        // SoftAP WiFi
+        WiFi.softAP(ssid, password);
+        WiFi.softAPConfig(local_ip, gateway, subnet);
+
+        timeoutTimer = millis();
+
+        while (1)
+        {
+            // TODO: check  && !clientConnected
+            if (millis() > timeoutTimer + 15 * 60000) // 15 minutes timeout
+            {
+                Serial.printf("\nConnection timeout\n");
+                break;
+            }
+        }
+    }
+
+    WiFi.setHostname(hostname.c_str()); //define hostname
+    
+    Serial.println("");
+    Serial.print("Connected to WiFi network with IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    Serial.println("===== WebSever =====");
+    ws.begin();
+    delay(5000);
+
     Serial.println("===== DHT Sensor =====");
     dht.begin();
     float t = dht.readTemperature(), h = dht.readHumidity();
@@ -85,7 +336,7 @@ void setup()
     }
     else
     {
-        Serial.printf("● Detected › Temp: %.1f°C Hum: %.1f%\n", dht.readTemperature(), dht.readHumidity());
+        Serial.printf("● Detected › Temp: %.1f°C Hum: %.1f%%\n", dht.readTemperature(), dht.readHumidity());
     }
 
     pinMode(PIN_ADC_BAT, INPUT);
@@ -104,19 +355,6 @@ void setup()
     Serial.println("===== Sleep timer =====");
     esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
     Serial.printf("Every: %d seconds", TIME_TO_SLEEP);
-
-    Serial.println("===== WiFi =====");
-    WiFi.begin(ssid, password);
-    WiFi.setHostname(hostname.c_str()); //define hostname
-
-    Serial.println("Connecting");
-    while(WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println("");
-    Serial.print("Connected to WiFi network with IP Address: ");
-    Serial.println(WiFi.localIP());
     
     Serial.println("Timer set to 5 seconds (timerDelay variable), it will take 5 seconds before publishing the first reading.");
 }
@@ -163,6 +401,7 @@ void loop()
     else 
     {
         Serial.println("WiFi Disconnected");
+        delay(1000);
     }
 }
 
@@ -208,34 +447,6 @@ void print_wakeup_reason()
         Serial.printf("Wakeup was not caused by deep sleep: %d\n", wakeup_reason);
         break;
     }
-}
-
-void read_adc_bat(uint16_t *voltage)
-{
-    uint32_t in = 0;
-    for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++)
-    {
-        in += (uint32_t)analogRead(PIN_ADC_BAT);
-    }
-    in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
-
-    uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
-
-    *voltage = bat_mv;
-}
-
-void read_adc_solar(uint16_t *voltage)
-{
-    uint32_t in = 0;
-    for (int i = 0; i < ADC_BATTERY_LEVEL_SAMPLES; i++)
-    {
-        in += (uint32_t)analogRead(PIN_ADC_SOLAR);
-    }
-    in = (int)in / ADC_BATTERY_LEVEL_SAMPLES;
-
-    uint16_t bat_mv = ((float)in / 4096) * 3600 * 2;
-
-    *voltage = bat_mv;
 }
 
 void printDirectory(File dir, int parentId)
