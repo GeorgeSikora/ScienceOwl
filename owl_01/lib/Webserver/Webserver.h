@@ -1,7 +1,8 @@
+#include <Arduino.h>
+#include <Settings.h>
+
 #ifndef Webserver_h
 #define Webserver_h
-
-#include <Arduino.h>
 
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
@@ -62,9 +63,9 @@ const char logout_html[] PROGMEM = R"rawliteral(
 
 class Webserver
 {
-  public:
-    Webserver();
-    void begin();
+    public:
+        Webserver();
+        void begin();
 };
 
 #endif

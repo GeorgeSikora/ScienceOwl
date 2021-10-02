@@ -1,5 +1,7 @@
 #include <Arduino.h>
 
+#define DEBUG
+
 #define PIN_ADC_BAT 35
 #define PIN_ADC_SOLAR 36
 #define ADC_BATTERY_LEVEL_SAMPLES 100

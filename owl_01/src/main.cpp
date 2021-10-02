@@ -1,5 +1,7 @@
 /* required libraries */
 #include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include <SPI.h>
 #include <SD.h>
 #include <Adafruit_Sensor.h>
@@ -10,19 +12,15 @@
 #define TINY_GSM_MODEM_SIM7000
 
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
-#define DUMP_AT_COMMANDS
+#define DUMP_AT_COMMANDS // Allow to log the AT commands in console
 
-
-#include <WiFi.h>
-#include <HTTPClient.h>
-
-#include "TinyGsmClient.h"
-#include "ThingsBoard.h"
+#include <TinyGsmClient.h>
 
 /* custom libraries */
 #include <Sensors.h>
 #include <Storage.h>
 #include <Webserver.h>
+#include <WifiNetworks.h>
 #include <Arduino.h>
 
 /* main config */
@@ -64,8 +62,11 @@ TinyGsm modem(debugger);
 TinyGsm modem(SerialAT);
 #endif
 
-/* webserver instance */
+/* Webserver instance */
 Webserver ws = Webserver();
+
+/* WifiNetworks instance */
+WifiNetworks wns = WifiNetworks();
 
 /* temp & humidity sensor */
 DHT dht(DHTPIN, DHTTYPE);
@@ -88,16 +89,6 @@ const char* password = "mostori871";
 /* target URL link for sending data */
 String serverName = "http://192.168.0.101/esp32/test1.php";
 
-struct WIFI_NETWORK {
-    char* ssid;
-    char* password;
-    long unsigned int timeoutCount;
-    long unsigned int connectionCount;
-};
-
-WIFI_NETWORK wifiNetworks[8];
-int wifiNetworksSize = 0;
-
 struct T_FILE_TREE {
     char* name;
     int size;
@@ -118,155 +109,7 @@ void printWakeupReason();
 
 void makeFilesTree(File dir, int parentId);
 
-int getWifiNetworksSize();
-void promoteWifiNetwork(int index);
-void printWifiNetworks();
-void loadWifiNetworks();
-void saveWifiNetworks();
-
 void printDhtStatus();
-
-int getWifiNetworksSize()
-{
-    int index = 0;
-    while (wifiNetworks[index].ssid != NULL)
-    {
-        index++;
-    }
-    return index;
-}
-
-void promoteWifiNetwork(int index)
-{
-    if (index <= 0 || index >= wifiNetworksSize) 
-    {
-        return;
-    }
-
-    WIFI_NETWORK target = wifiNetworks[index];
-
-    #ifdef DEBUG
-        Serial.println("===== Promoting Wifi Network =====");
-        Serial.println("Target wifi network to promote:");
-        Serial.printf("[%d] ssid: %s password: %s\n", index, target.ssid, target.password);
-    #endif
-
-    for (int i = index; i >= 1; i--)
-    {
-        wifiNetworks[i] = wifiNetworks[i-1];
-    }
-
-    wifiNetworks[0] = target;
-}
-
-void printWifiNetworks()
-{
-    Serial.println("===== Wifi Networks List =====");
-
-    for (int i = 0; i < wifiNetworksSize; i++)
-    {
-        WIFI_NETWORK wn = wifiNetworks[i];
-
-        Serial.printf("[%d] ssid: %s password: %s\n", i, wn.ssid, wn.password);
-    }
-}
-
-void loadWifiNetworks()
-{
-    File file = SD.open("/wifi_networks.json");
-
-    if (!file) 
-    {
-        #ifdef DEBUG
-            Serial.println("ERROR! File \"wifi_networks.json\" on SD card doesn't exists!");
-        #endif
-
-        return;
-    }
-
-    String jsonStr = "";
-    while (file.available())
-    {
-        jsonStr += (char)file.read();
-    }
-    file.close();
-
-    #ifdef DEBUG
-        Serial.println("===== strWifiNetworks =====");
-        Serial.printf("Maximum alloc memory: %d\n", ESP.getMaxAllocHeap());
-        Serial.printf("WifiNetworks string length: %d\n", jsonStr.length());
-        Serial.println(jsonStr);
-    #endif
-
-    // compute the required size
-    const size_t CAPACITY = 1024;
-
-    // allocate the memory for the document
-    StaticJsonDocument<CAPACITY> doc;
-
-    // parse a JSON array
-    deserializeJson(doc, jsonStr);
-
-    // extract the values
-    JsonArray array = doc.as<JsonArray>();
-    int i = 0;
-    for (JsonVariant v : array) 
-    {
-        JsonObject obj = v.as<JsonObject>();
-
-        const char* ssid = obj["ssid"];
-        const char* password = obj["password"];
-        const long unsigned int timeoutCount = obj["timeoutCount"];
-        const long unsigned int connectionCount = obj["connectionCount"];
-
-        wifiNetworks[i].ssid = strdup(ssid);
-        wifiNetworks[i].password = strdup(password);
-        wifiNetworks[i].timeoutCount = timeoutCount;
-        wifiNetworks[i].connectionCount = connectionCount;
-        
-        #ifdef DEBUG
-            Serial.printf("ssid: %s password: %s timeoutCount: %lu connectionCount: %lu \n", ssid, password, timeoutCount, connectionCount);
-        #endif
-
-        i++;
-    }
-
-    wifiNetworksSize = array.size();
-}
-
-void saveWifiNetworks()
-{
-    #ifdef DEBUG
-        Serial.println("===== Saving WiFi Networks =====");
-    #endif
-
-    // compute the required size
-    const size_t CAPACITY = 1024;
-
-    // allocate the memory for the document
-    StaticJsonDocument<CAPACITY> doc;
-
-    // create an empty array
-    JsonArray array = doc.to<JsonArray>();
-
-    for (int i = 0; i < wifiNetworksSize; i++)
-    {
-        JsonObject obj = array.createNestedObject();
-
-        obj["ssid"] = wifiNetworks[i].ssid;
-        obj["password"] = wifiNetworks[i].password;
-        obj["connectionCount"] = wifiNetworks[i].connectionCount;
-    }
-
-    File file = SD.open("/wifi_networks.json", FILE_WRITE);
-    WriteLoggingStream loggedFile(file, Serial);
-    serializeJson(doc, loggedFile);
-    file.close();
-
-    #ifdef DEBUG
-        Serial.println("Successfully saved on SD card");
-    #endif
-}
 
 void printDhtStatus()
 {
@@ -364,17 +207,17 @@ void setup()
 
     unsigned long timeoutTimer = 0;
 
-    loadWifiNetworks();
+    wns.load();
     
     #ifdef DEBUG
         Serial.println("===== WiFi =====");
-        Serial.printf("Size of stored wifi networks: %d\n", wifiNetworksSize);
+        Serial.printf("Size of stored wifi networks: %d\n", wns.size);
         Serial.println("Trying connect to wifi network points:");
     #endif
 
-    for (int i = 0; i < wifiNetworksSize; i++)
+    for (int i = 0; i < wns.size; i++)
     {
-        WIFI_NETWORK wn = wifiNetworks[i];
+        WIFI_NETWORK wn = wns.getByIndex(i);
 
         timeoutTimer = millis();
 
@@ -390,7 +233,7 @@ void setup()
             if (WiFi.status() == WL_CONNECTED)
             {
                 wn.connectionCount++;
-                promoteWifiNetwork(i);
+                wns.promote(i);
                 
                 #ifdef DEBUG
                     Serial.printf(" Connected!\n");
@@ -417,10 +260,10 @@ void setup()
     }
 
     #ifdef DEBUG
-        printWifiNetworks();
+        wns.print();
     #endif
 
-    saveWifiNetworks();
+    wns.save();
 
     /***** CREATE WIFI ACCESS POINT ****/
 
@@ -455,11 +298,12 @@ void setup()
     #endif
 
     /***** WEBSERVER *****/
+
     #ifdef DEBUG
         Serial.println("===== WebSever =====");
     #endif
 
-    ws.begin();
+    //ws.begin();
 
     /***** DHT SENSOR ****/
 
@@ -583,5 +427,192 @@ void makeFilesTree(File dir, int parentId)
         }
 
         entry.close();
+    }
+}
+
+void modem_reset()
+{
+    Serial.println("Modem hardware reset");
+    pinMode(MODEM_RST, OUTPUT);
+    digitalWrite(MODEM_RST, LOW);
+    delay(260); //Treset 252ms
+    digitalWrite(MODEM_RST, HIGH);
+    delay(4000); //Modem takes longer to get ready and reply after this kind of reset vs power on
+
+    //modem.factoryDefault();
+    //modem.restart(); //this results in +CGREG: 0,0
+}
+
+void modem_on()
+{
+    // Set-up modem  power pin
+    pinMode(MODEM_PWKEY, OUTPUT);
+    digitalWrite(MODEM_PWKEY, HIGH);
+    delay(10);
+    digitalWrite(MODEM_PWKEY, LOW);
+    delay(1010); //Ton 1sec
+    digitalWrite(MODEM_PWKEY, HIGH);
+
+    //wait_till_ready();
+    Serial.println("Waiting till modem ready...");
+    delay(4510); //Ton uart 4.5sec but seems to need ~7sec after hard (button) reset
+    //On soft-reset serial replies immediately.
+
+    Serial.println("Wait...");
+    SerialAT.begin(115200, SERIAL_8N1, MODEM_TX, MODEM_RX);
+    modem.setBaud(115200);
+    modem.begin();
+    delay(10000);
+
+    if (!modem.restart()) 
+    {
+        Serial.println(F(" [fail]"));
+        Serial.println(F("************************"));
+        Serial.println(F(" Is your modem connected properly?"));
+        Serial.println(F(" Is your serial speed (baud rate) correct?"));
+        Serial.println(F(" Is your modem powered on?"));
+        Serial.println(F(" Do you use a good, stable power source?"));
+        Serial.println(
+        F(" Try useing File -> Examples -> TinyGSM -> tools -> AT_Debug to find correct configuration"));
+        Serial.println(F("************************"));
+        delay(10000);
+        return;
+    }
+    Serial.println(F("Step 2: [OK] was able to open modem"));
+    String modemInfo = modem.getModemInfo();
+    Serial.println("Step 3: Modem details: ");
+    Serial.println(modemInfo);
+
+    Serial.println("Waiting for network...");
+    if (!modem.waitForNetwork()) 
+    {
+        Serial.println(" fail");
+        delay(10000);
+        return;
+    }
+    Serial.println(" success");
+
+    if (modem.isNetworkConnected()) 
+    {
+        Serial.println("Network connected");
+    }
+    Serial.print("Step 4: Waiting for network...");
+    if (!modem.waitForNetwork(1200000L)) 
+    {
+        Serial.println(F(" [fail] while waiting for network"));
+        Serial.println(F("************************"));
+        Serial.println(F(" Is your sim card locked?"));
+        Serial.println(F(" Do you have a good signal?"));
+        Serial.println(F(" Is antenna attached?"));
+        Serial.println(F(" Does the SIM card work with your phone?"));
+        Serial.println(F("************************"));
+        delay(10000);
+        return;
+    }
+    Serial.println(F("Found network: [OK]"));
+
+    Serial.print("Step 5: About to set network mode to LTE Only 38: ");
+    // Might not be needed for your carrier 
+    modem.setNetworkMode(38);
+
+    delay(3000);
+
+    Serial.print("Step 6: About to set network mode: to CAT=M");
+    // Might not be needed for your carrier 
+    modem.setPreferredMode(3);
+    delay(500);
+
+    Serial.print(F("Waiting for network..."));
+    if (!modem.waitForNetwork(60000L))
+    {
+        Serial.println(" fail");
+        modem_reset();
+        shutdown();
+    }
+    Serial.println(" OK");
+
+    Serial.print("Signal quality:");
+    Serial.println(modem.getSignalQuality());
+    delay(3000);
+
+    // GPRS connection parameters are usually set after network registration
+    Serial.println("Step 7: Connecting to Rogers APN at LTE Mode Only (channel--> 38): ");
+    /*
+    if (!modem.gprsConnect(apn, user, pass))
+    {
+        Serial.println(F(" [fail]"));
+        Serial.println(F("************************"));
+        Serial.println(F(" Is GPRS enabled by network provider?"));
+        Serial.println(F(" Try checking your card balance."));
+        Serial.println(F("************************"));
+        delay(10000);
+        return;
+    }
+
+    if (modem.isGprsConnected()) 
+    {
+        Serial.println(F("Step 8: Connected to network: [OK]"));
+        IPAddress local = modem.localIP();
+        Serial.print("Step 9: Local IP: ");
+        Serial.println(local);
+        modem.enableGPS();
+        delay(3000);
+        String IMEI = modem.getIMEI();
+        Serial.print("Step 10: IMEI: ");
+        Serial.println(IMEI);
+    } 
+    else 
+    {
+        Serial.println(F("Step 8: FAIL NOT Connected to network: "));
+    }
+
+    modemConnected = true;
+    Serial.println("Modem Connected to Rogers' LTE (channel--> 38) CAT-M (preferred network). TLE CAT-M OK");
+    */
+}
+
+void modem_off()
+{
+    //if you turn modem off while activating the fancy sleep modes it takes ~20sec, else its immediate
+    Serial.println("Going to sleep now with modem turned off");
+    //modem.gprsDisconnect();
+    //modem.radioOff();
+    modem.sleepEnable(false); // required in case sleep was activated and will apply after reboot
+    modem.poweroff();
+}
+
+// fancy low power mode - while connected
+void modem_sleep() // will have an effect after reboot and will replace normal power down
+{
+    Serial.println("Going to sleep now with modem in power save mode");
+    // needs reboot to activa and takes ~20sec to sleep
+    //modem.PSM_mode();    //if network supports will enter a low power sleep PCM (9uA)
+    //modem.eDRX_mode14(); // https://github.com/botletics/SIM7000-LTE-Shield/wiki/Current-Consumption#e-drx-mode
+    modem.sleepEnable(); //will sleep (1.7mA), needs DTR or PWRKEY to wake
+    pinMode(MODEM_DTR, OUTPUT);
+    digitalWrite(MODEM_DTR, HIGH);
+}
+
+void modem_wake()
+{
+    Serial.println("Wake up modem from sleep");
+    // DTR low to wake serial
+    pinMode(MODEM_DTR, OUTPUT);
+    digitalWrite(MODEM_DTR, LOW);
+    delay(50);
+    //wait_till_ready();
+}
+
+void wait_till_ready() // NOT WORKING - Attempt to minimize waiting time
+{
+    for (int8_t i = 0; i < 100; i++) //timeout 100 x 100ms = 10sec
+    {
+        if (modem.testAT())
+        {
+            //Serial.println("Wait time:%F sec\n", i/10));
+            Serial.printf("Wait time: %d\n", i);
+            break;
+        }
+        delay(100);
     }
 }
