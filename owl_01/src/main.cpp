@@ -17,15 +17,12 @@
 #include <TinyGsmClient.h>
 
 /* custom libraries */
+#include <Settings.h>
 #include <Sensors.h>
 #include <Storage.h>
 #include <Webserver.h>
 #include <WifiNetworks.h>
 #include <Arduino.h>
-
-/* main config */
-#define DEBUG /* DEBUG MODE */
-//#define FILES_TREE /* SD Card Files Tree chain */
 
 #define uS_TO_S_FACTOR 1000000 /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP 60       /* ESP32 should sleep more seconds  (note SIM7000 needs ~20sec to turn off if sleep is activated) */
@@ -36,12 +33,6 @@
 
 /* LED pin */
 #define LED 12
-
-/* SD Card */
-#define SD_MISO  2
-#define SD_MOSI 15
-#define SD_SCLK 14
-#define SD_CS   13
 
 /* TTGO T-SIM pin definitions */
 #define MODEM_RST 5
@@ -55,11 +46,11 @@
 #define SerialAT Serial1
 
 #ifdef DUMP_AT_COMMANDS
-#include <StreamDebugger.h>
-StreamDebugger debugger(SerialAT, Serial);
-TinyGsm modem(debugger);
+    #include <StreamDebugger.h>
+    StreamDebugger debugger(SerialAT, Serial);
+    TinyGsm modem(debugger);
 #else
-TinyGsm modem(SerialAT);
+    TinyGsm modem(SerialAT);
 #endif
 
 /* Webserver instance */
@@ -141,7 +132,7 @@ void setup()
     
     /***** BOOT INIT *****/
 
-    ++bootCount;
+    bootCount++;
     
     #ifdef DEBUG
         Serial.println("===== Boot =====");

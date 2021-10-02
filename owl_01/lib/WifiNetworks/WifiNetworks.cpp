@@ -5,6 +5,10 @@
 
 #include <WifiNetworks.h>
 
+WifiNetworks::WifiNetworks()
+{
+}
+
 int WifiNetworks::calcSize()
 {
     int index = 0;

@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
-#define DEBUG
+#define DEBUG /* Serial console log */
+#define FILES_TREE /* SD Card Files Tree chain */
 
 #define PIN_ADC_BAT 35
 #define PIN_ADC_SOLAR 36
