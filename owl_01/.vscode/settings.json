@@ -15,7 +15,8 @@
         "bitset": "cpp",
         "algorithm": "cpp",
         "regex": "cpp",
-        "string_view": "cpp"
+        "string_view": "cpp",
+        "*.tpp": "cpp"
     },
-    "C_Cpp.errorSquiggles": "Enabled"
+    "C_Cpp.errorSquiggles": "Disabled"
 }

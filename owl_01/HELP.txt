@@ -1,2 +1,3 @@
 ws - Web Server
-wn - Wifi Networks
+wns - Wifi Networks
+sm - Storage Manager
